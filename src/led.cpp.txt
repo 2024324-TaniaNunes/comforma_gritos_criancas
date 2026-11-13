@@ -1,0 +1,30 @@
+#include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
+
+const int PINO_LEDS = 6;   // porta D6 da Base Shield
+const int NUM_LEDS = 30;   // MUDAR para o número de LEDs da vossa tira
+
+Adafruit_NeoPixel tira(NUM_LEDS, PINO_LEDS, NEO_GRB + NEO_KHZ800);
+
+void setup()
+{
+    tira.begin();            // inicia a tira
+    tira.setBrightness(50);  // brilho de 0 a 255 (baixo para poupar corrente)
+    tira.show();             // começa tudo apagado
+}
+
+void loop()
+{
+    // LIGAR: todos os LEDs ficam brancos
+    for (int i = 0; i < NUM_LEDS; i++)
+    {
+        tira.setPixelColor(i, tira.Color(255, 255, 255));
+    }
+    tira.show();   // envia para a tira (só aqui acende)
+    delay(1000);   // fica aceso 1 segundo
+
+    // DESLIGAR: todos os LEDs apagam
+    tira.clear();
+    tira.show();   // envia para a tira (só aqui apaga)
+    delay(1000);   // fica apagado 1 segundo
+}
