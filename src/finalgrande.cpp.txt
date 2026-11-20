@@ -1,0 +1,194 @@
+#include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
+
+// ---------- LIGAÇÕES ----------
+const int PINO_SENSOR = A0;   // sensor de som (Loudness)
+const int PINO_LEDS = 6;      // tira de LEDs (porta D6)
+const int NUM_LEDS = 30;      // número de LEDs da tira
+
+// ---------- AJUSTES DO SOM ----------
+const int MARGEM = 60;                    // quanto acima do silêncio conta como som
+const int ALCANCE = 100;                  // quanto o som tem de subir acima do limite para acender os 30 LEDs
+                                          // (mais baixo = barra sobe mais depressa, mais alto = precisa de mais barulho)
+const float VELOCIDADE_DESCIDA = 0.4;     // quantos LEDs apagam por ciclo quando o som baixa
+
+// ---------- AJUSTES DAS CORES ----------
+const int BRILHO = 20;            // 0 a 255 (baixo para gastar pouca corrente)
+const int G_AMARELO = 130;        // quanto verde tem o amarelo (mais baixo = mais laranja, mais alto = mais esverdeado)
+const int LARGURA_DEGRADE = 2;    // LEDs de transição em cada fronteira (0 = divisão seca)
+
+Adafruit_NeoPixel tira(NUM_LEDS, PINO_LEDS, NEO_GRB + NEO_KHZ800);
+
+int limite = 0;              // valor do sensor a partir do qual há som (calculado na calibração)
+float nivelSuave = 0;        // nível atual da barra (em número de LEDs, com decimais)
+int ultimoNumero = -1;       // quantos LEDs estavam acesos da última vez
+
+// ---------- 1. LER O SENSOR ----------
+// média de várias leituras (reduz o ruído)
+int lerSensor()
+{
+    long soma = 0;
+    for (int i = 0; i < 8; i++)
+    {
+        soma += analogRead(PINO_SENSOR);
+    }
+    return soma / 8;
+}
+
+// ---------- 2. CALIBRAR O SILÊNCIO ----------
+void calibrar()
+{
+    int maximo = 0;
+    unsigned long inicio = millis();
+    while (millis() - inicio < 2000)
+    {
+        int leitura = lerSensor();
+        if (leitura > maximo)
+        {
+            maximo = leitura;
+        }
+        delay(10);
+    }
+    limite = maximo + MARGEM;
+
+    Serial.print("Pico do silencio: ");
+    Serial.print(maximo);
+    Serial.print("  Limite: ");
+    Serial.println(limite);
+}
+
+// ---------- 3. TRANSFORMAR O SOM EM NÚMERO DE LEDS ----------
+// devolve um valor entre 0 e NUM_LEDS
+float calcularAlvo(int loudness)
+{
+    if (loudness <= limite)
+    {
+        return 0;  // silêncio: nenhum LED
+    }
+    float alvo = (float)(loudness - limite) * NUM_LEDS / ALCANCE;
+    if (alvo > NUM_LEDS)
+    {
+        alvo = NUM_LEDS;  // não passa do máximo
+    }
+    return alvo;
+}
+
+// ---------- 4. SUBIR RÁPIDO, DESCER DEVAGAR ----------
+void atualizarNivel(float alvo)
+{
+    if (alvo > nivelSuave)
+    {
+        nivelSuave += (alvo - nivelSuave) * 0.6;  // sobe depressa
+    }
+    else
+    {
+        nivelSuave -= VELOCIDADE_DESCIDA;         // desce devagar
+        if (nivelSuave < alvo)
+        {
+            nivelSuave = alvo;
+        }
+    }
+}
+
+// ---------- 5. COR DE CADA LED (VERDE | AMARELO | VERMELHO) ----------
+// mistura duas cores (só vermelho e verde): f = 0 dá a cor 1, f = 1 dá a cor 2
+uint32_t misturar(int r1, int g1, int r2, int g2, float f)
+{
+    int r = r1 + (r2 - r1) * f;
+    int g = g1 + (g2 - g1) * f;
+    return tira.Color(r, g, 0);
+}
+
+uint32_t corDoLed(int i)
+{
+    int fronteira1 = NUM_LEDS / 3;        // LED 10: onde acaba o verde
+    int fronteira2 = NUM_LEDS * 2 / 3;    // LED 20: onde acaba o amarelo
+    int meio = LARGURA_DEGRADE / 2;
+
+    int inicio1 = fronteira1 - meio;      // começa o degradê verde -> amarelo
+    int inicio2 = fronteira2 - meio;      // começa o degradê amarelo -> vermelho
+
+    if (i < inicio1)
+    {
+        return tira.Color(0, 255, 0);                             // verde
+    }
+    else if (i < inicio1 + LARGURA_DEGRADE)
+    {
+        float f = (float)(i - inicio1 + 1) / (LARGURA_DEGRADE + 1);
+        return misturar(0, 255, 255, G_AMARELO, f);               // verde -> amarelo
+    }
+    else if (i < inicio2)
+    {
+        return tira.Color(255, G_AMARELO, 0);                     // amarelo
+    }
+    else if (i < inicio2 + LARGURA_DEGRADE)
+    {
+        float f = (float)(i - inicio2 + 1) / (LARGURA_DEGRADE + 1);
+        return misturar(255, G_AMARELO, 255, 0, f);               // amarelo -> vermelho
+    }
+    else
+    {
+        return tira.Color(255, 0, 0);                             // vermelho
+    }
+}
+
+// ---------- 6. DESENHAR A BARRA ----------
+void desenharBarra(int nAcesos)
+{
+    for (int i = 0; i < NUM_LEDS; i++)
+    {
+        if (i < nAcesos)
+        {
+            tira.setPixelColor(i, corDoLed(i));  // aceso com a cor da sua posição
+        }
+        else
+        {
+            tira.setPixelColor(i, 0);            // apagado
+        }
+    }
+    tira.show();
+}
+
+// ---------- PROGRAMA ----------
+void setup()
+{
+    Serial.begin(9600);
+    tira.begin();
+    tira.setBrightness(BRILHO);
+    tira.show();   // começa tudo apagado
+
+    delay(500);    // deixa a alimentação estabilizar
+    calibrar();    // 2 segundos em silêncio!
+}
+
+void loop()
+{
+    int loudness = lerSensor();               // 1. ler o som
+    float alvo = calcularAlvo(loudness);      // 3. som -> número de LEDs
+    atualizarNivel(alvo);                     // 4. suavizar subida e descida
+
+    int nAcesos = (int)(nivelSuave + 0.5);    // arredonda para número inteiro de LEDs
+
+    // só atualiza a tira se o número de LEDs mudou
+    if (nAcesos != ultimoNumero)
+    {
+        desenharBarra(nAcesos);
+        ultimoNumero = nAcesos;
+        delay(10);                            // pequena pausa depois de mexer na tira
+    }
+
+    // informação para afinar (Serial Monitor)
+    static int maximoVisto = 0;
+    if (loudness > maximoVisto)
+    {
+        maximoVisto = loudness;
+    }
+    Serial.print("som: ");
+    Serial.print(loudness);
+    Serial.print("  max: ");
+    Serial.print(maximoVisto);
+    Serial.print("  limite: ");
+    Serial.println(limite);
+
+    delay(20);
+}
